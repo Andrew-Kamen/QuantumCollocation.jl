@@ -173,13 +173,18 @@ function FirstOrderObjective(
     @views function toggle(Z::AbstractVector, a_idx::AbstractVector{<:Int}, U_idx::AbstractVector{<:Int})
         a  = Z[a_idx]
         U  = iso_vec_to_operator(Z[U_idx])
-        He = H_err(a)
-        return U' * He * U
+        He_vec = H_err(a)
+        return [U' * He * U for He in He_vec]
     end
 
     function ℓ(Z::AbstractVector{<:Real})
-        sum_terms = sum(toggle(Z, a_idx, U_idx) for (a_idx, U_idx) in zip(a_indices, Ũ⃗_indices))
-        return Q_t * real(norm(tr(sum_terms' * sum_terms), 2)) / real(traj.T^2 * H_scale)
+        terms = []
+        for j in 1:length(toggle(Z, a_indices[1], Ũ⃗_indices[1]))
+            sum_terms = sum(toggle(Z, a_idx, U_idx)[j] for (a_idx, U_idx) in zip(a_indices, Ũ⃗_indices))
+            push!(terms, sum_terms)
+        end
+        O = sum(real(norm(tr(term' * term), 2)) / real(traj.T^2 * H_scale^2) for term in terms) 
+        return Q_t * O
     end
 
     ∇ℓ = Z ->  ForwardDiff.gradient(ℓ, Z)
@@ -241,7 +246,7 @@ function UniversalObjective(
                 s += abs2(τ)
             end
         end
-        return Q_t * (s / (U_scale * T^2) - 1.0)
+        return Q_t * (s / (U_scale * T^2)^2 - 1.0)
     end
 
     ∇ℓ = Z -> ForwardDiff.gradient(ℓ, Z)
@@ -338,7 +343,7 @@ function TurboUniversalObjective(
     U = ones(length(traj.components.Ũ⃗))
     U_scale = norm(U, 2)
     Ũ⃗_indices  = [collect(slice(k, traj.components.Ũ⃗, traj.dim)) for k in 1:traj.T]
-    normalization = Q_t / (U_scale * T^2)
+    normalization = Q_t / (U_scale^2 * T^2)
     # Build a column-stacked matrix V whose k-th column is the vectorized U(t_k,0).
     # Ũ⃗_indices[k] are the index ranges/slices inside Z for the k-th unitary's vectorization.
     
