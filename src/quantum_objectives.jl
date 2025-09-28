@@ -11,6 +11,8 @@ export LeakageObjective
 export UniversalObjective
 export FastUniversalObjective
 export TurboUniversalObjective
+export FastToggleObjective
+export UltraUniversalObjective
 
 using LinearAlgebra
 using NamedTrajectories
@@ -173,18 +175,14 @@ function FirstOrderObjective(
     @views function toggle(Z::AbstractVector, a_idx::AbstractVector{<:Int}, U_idx::AbstractVector{<:Int})
         a  = Z[a_idx]
         U  = iso_vec_to_operator(Z[U_idx])
-        He_vec = H_err(a)
-        return [U' * He * U for He in He_vec]
+        He_vec_vec = H_err(a)
+        return [[U' * He * U for He in He_vec] for He in He_vec]
+
     end
 
     function ℓ(Z::AbstractVector{<:Real})
-        terms = []
-        for j in 1:length(toggle(Z, a_indices[1], Ũ⃗_indices[1]))
-            sum_terms = sum(toggle(Z, a_idx, U_idx)[j] for (a_idx, U_idx) in zip(a_indices, Ũ⃗_indices))
-            push!(terms, sum_terms)
-        end
-        O = sum(real(norm(tr(term' * term), 2)) / real(traj.T^2 * H_scale^2) for term in terms) 
-        return Q_t * O
+        sum_terms = sum(toggle(Z, a_idx, U_idx) for (a_idx, U_idx) in zip(a_indices, Ũ⃗_indices))
+        return Q_t * real(norm(tr(sum_terms' * sum_terms), 2)) / real(traj.T^2 * H_scale)
     end
 
     ∇ℓ = Z ->  ForwardDiff.gradient(ℓ, Z)
