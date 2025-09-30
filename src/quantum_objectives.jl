@@ -13,6 +13,7 @@ export FastUniversalObjective
 export TurboUniversalObjective
 export FastToggleObjective
 export UltraUniversalObjective
+export TogglingObjective
 
 using LinearAlgebra
 using NamedTrajectories
@@ -150,8 +151,12 @@ function UnitarySensitivityObjective(
     times::AbstractVector{Int};
     Qs::AbstractVector{<:Float64}=fill(1.0, length(times)),
     scale::Float64=1.0,
+    num_errors::Int
 )
-    ℓ = Ũ⃗ -> scale^4 * unitary_fidelity_loss(Ũ⃗)
+    Δt = traj.Δt[1]
+    T = traj.T
+
+    ℓ = Ũ⃗ -> scale^4 * sqrt(unitary_fidelity_loss(Ũ⃗)) / (Δt * T)^2 / num_errors
 
     return KnotPointObjective(
         ℓ,
@@ -175,14 +180,20 @@ function FirstOrderObjective(
     @views function toggle(Z::AbstractVector, a_idx::AbstractVector{<:Int}, U_idx::AbstractVector{<:Int})
         a  = Z[a_idx]
         U  = iso_vec_to_operator(Z[U_idx])
-        He_vec_vec = H_err(a)
-        return [[U' * He * U for He in He_vec] for He in He_vec]
+        He_vec = H_err(a)
+        return [U' * He * U for He in He_vec]
 
     end
 
     function ℓ(Z::AbstractVector{<:Real})
-        sum_terms = sum(toggle(Z, a_idx, U_idx) for (a_idx, U_idx) in zip(a_indices, Ũ⃗_indices))
-        return Q_t * real(norm(tr(sum_terms' * sum_terms), 2)) / real(traj.T^2 * H_scale)
+        terms = []
+        D = length(toggle(Z, a_indices[1], Ũ⃗_indices[1]))
+        for j in 1:D
+            sum_terms = sum(toggle(Z, a_idx, U_idx)[j] for (a_idx, U_idx) in zip(a_indices, Ũ⃗_indices))
+            push!(terms, sum_terms)
+        end
+        FO_obj = sum(real(norm(tr(term' * term), 2)) / real(traj.T^2 * H_scale^2) / D for term in terms) 
+        return Q_t * FO_obj
     end
 
     ∇ℓ = Z ->  ForwardDiff.gradient(ℓ, Z)
@@ -219,8 +230,7 @@ function UniversalObjective(
 )
 
     T = traj.T
-    U = ones(length(traj.components.Ũ⃗))
-    U_scale = norm(U, 2)
+    D = size(iso_vec_to_operator(traj.components.Ũ⃗[:,end]))[1]
     Ũ⃗_indices  = [collect(slice(k, traj.components.Ũ⃗, traj.dim)) for k in 1:traj.T]
     # one = Ũ⃗_indices[1]
     # U_scale  = norm(iso_vec_to_operator(Z[one]), 2)
@@ -244,7 +254,7 @@ function UniversalObjective(
                 s += abs2(τ)
             end
         end
-        return Q_t * (s / (U_scale * T^2)^2 - 1.0)
+        return Q_t * (s / (D^2 * T^4))
     end
 
     ∇ℓ = Z -> ForwardDiff.gradient(ℓ, Z)
@@ -336,12 +346,10 @@ function TurboUniversalObjective(
     traj::NamedTrajectory;
     Q_t::Float64 = 1.0,
 )
-
     T = traj.T
-    U = ones(length(traj.components.Ũ⃗))
-    U_scale = norm(U, 2)
+    D = size(iso_vec_to_operator(traj.components.Ũ⃗[:,end]))[1]
     Ũ⃗_indices  = [collect(slice(k, traj.components.Ũ⃗, traj.dim)) for k in 1:traj.T]
-    normalization = Q_t / (U_scale^2 * T^2)
+    normalization = Q_t / (D^2 * T^2)
     # Build a column-stacked matrix V whose k-th column is the vectorized U(t_k,0).
     # Ũ⃗_indices[k] are the index ranges/slices inside Z for the k-th unitary's vectorization.
     
@@ -363,7 +371,7 @@ function TurboUniversalObjective(
         V  = build_V_from_packed(z̃)    # m×T
         G  = V' * V                    # T×T Gram
         s  = sum(abs2, G)              # ‖G‖_F^2 = Σ_{k,ℓ} |Tr(U_k U_ℓ†)|²
-        return normalization * s - Q_t
+        return normalization * s
     end
 
 
@@ -421,6 +429,118 @@ function LeakageObjective(
         Qs=Qs,
         times=times,
     )
+end
+
+
+#-----------------------------
+# Toggling 
+#-----------------------------
+function TogglingObjective(
+    H_err::Function,
+    ∂H_err::Function, 
+    traj::NamedTrajectory;
+    Q_t::Float64=1.0
+)
+    a_indices  = [collect(slice(k, traj.components.a, traj.dim)) for k in 1:traj.T]
+    Ũ⃗_indices  = [collect(slice(k, traj.components.Ũ⃗, traj.dim)) for k in 1:traj.T]
+    a_ref = ones(length(traj.components.a))
+    H_scale = norm(H_err(a_ref), 2)
+
+    @views function toggle(Z::AbstractVector, a_idx::AbstractVector{<:Int}, U_idx::AbstractVector{<:Int})
+        a  = Z[a_idx]
+        U  = iso_vec_to_operator(Z[U_idx])
+        He_vec = H_err(a)
+        return [U' * He * U for He in He_vec]
+    end
+
+    function ∇toggle(Z::AbstractVector, a_idx::AbstractVector{<:Int}, U_idx::AbstractVector{<:Int})
+        a  = Z[a_idx]
+        U  = iso_vec_to_operator(Z[U_idx])
+        He_vec = H_err(a)
+        ∂He_vec = ∂H_err(a)
+        n = Int(sqrt(length(U_idx) ÷ 2))
+        grads = [spzeros(Matrix{ComplexF64}, length(Z)) for He in He_vec]
+
+        for (g, He, ∂He) in zip(grads, He_vec, ∂He_vec)
+            ### a derivatives ### 
+            for (a_i, ∂Ha) in zip(a_idx, ∂He)
+                g[a_i] = U' * ∂Ha * U
+            end
+            ### U derivatives ### 
+            for U_i in U_idx
+                idx = U_i - U_idx[1] + 1
+                i = (idx % n) == 0 ? n : idx % n
+                j =(idx - i) ÷ (2 * n) + 1
+                re = (idx % (2*n) == 0 ? 2*n : idx%(2*n)) ≤ n
+                d = spzeros(ComplexF64, (n,n))
+                d[i,j] = re ? 1 : 1im 
+                g[U_i] = U' * He * d + d' * He * U
+            end 
+        end
+        return grads 
+    end
+
+    function ℓ(Z::AbstractVector{<:Real})
+        terms = []
+        for j in 1:length(toggle(Z, a_indices[1], Ũ⃗_indices[1]))
+            sum_terms = sum(toggle(Z, a_idx, U_idx)[j] for (a_idx, U_idx) in zip(a_indices, Ũ⃗_indices))
+            push!(terms, sum_terms)
+        end
+        FO_obj = sum(real(norm(tr(term' * term), 2)) / real(traj.T^2 * H_scale^2) for term in terms) 
+        return Q_t * FO_obj
+    end 
+
+    function ∇ℓ(Z::AbstractVector{<:Real})
+        ### Get the "total" toggle for each alongside the gradient 
+        terms = []
+        grads = []
+        for j in 1:length(toggle(Z, a_indices[1], Ũ⃗_indices[1]))
+            sum_terms = sum(toggle(Z, a_idx, U_idx)[j] for (a_idx, U_idx) in zip(a_indices, Ũ⃗_indices))
+            sum_grads = spzeros(Matrix{ComplexF64}, length(Z))
+            for (a_idx, U_idx) in zip(a_indices, Ũ⃗_indices) 
+                g = ∇toggle(Z, a_idx, U_idx)[j] 
+                for (idx, val) in zip(g.nzind, g.nzval)
+                    sum_grads[idx] = val
+                end
+            end
+            push!(terms, sum_terms)
+            push!(grads, sum_grads)
+        end
+
+        full_grad = spzeros(size(Z))
+
+        for (t, g) in zip(terms, grads)
+            for (idx, v) in zip(g.nzind, g.nzval)
+                full_grad[idx] += sum(2 * real(t) .* real(v) + 2 * imag(t) .* imag(v))
+            end 
+        end
+        return Q_t * full_grad/ real(traj.T^2 * H_scale^2)
+    end 
+
+    function ∂²ℓ_structure()
+        Z_dim = traj.dim * traj.T + traj.global_dim
+        structure = spzeros(Z_dim, Z_dim)
+        all_Ũ⃗_indices = vcat(Ũ⃗_indices...)
+        
+        for i in all_Ũ⃗_indices
+            for j in all_Ũ⃗_indices
+                structure[i, j] = 1.0
+            end
+        end
+        
+        structure_pairs = collect(zip(findnz(structure)[1:2]...))
+        return structure_pairs
+    end
+
+    function ∂²ℓ(Z::AbstractVector{<:Real})
+        structure_pairs = ∂²ℓ_structure()
+        H_full = ForwardDiff.hessian(ℓ, Z)
+        ∂²ℓ_values = [H_full[i, j] for (i, j) in structure_pairs]
+        
+        return ∂²ℓ_values
+    end
+
+    return Objective(ℓ, ∇ℓ, ∂²ℓ, ∂²ℓ_structure)
 end
 
 
