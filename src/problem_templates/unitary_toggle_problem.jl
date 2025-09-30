@@ -75,7 +75,7 @@ function UnitaryToggleProblem(
 
     ### Errors ###
     H_err = a -> [1im * iso_operator_to_operator(H(a)) for H in system.G_vars]
-    ∂H_err = a -> [1im * [iso_operator_to_operator(v) for v in H(a)] for H in system.∂G_vars]
+    ∂H_err = a -> [0.0*a for H in system.G_vars]
 
     # Trajectory
     if !isnothing(init_trajectory)

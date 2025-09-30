@@ -445,6 +445,7 @@ function TogglingObjective(
     Ũ⃗_indices  = [collect(slice(k, traj.components.Ũ⃗, traj.dim)) for k in 1:traj.T]
     a_ref = ones(length(traj.components.a))
     H_scale = norm(H_err(a_ref), 2)
+    D = size(iso_vec_to_operator(traj.components.Ũ⃗[:,end]))[1]
 
     @views function toggle(Z::AbstractVector, a_idx::AbstractVector{<:Int}, U_idx::AbstractVector{<:Int})
         a  = Z[a_idx]
@@ -458,6 +459,7 @@ function TogglingObjective(
         U  = iso_vec_to_operator(Z[U_idx])
         He_vec = H_err(a)
         ∂He_vec = ∂H_err(a)
+        D = length(toggle(Z, a_indices[1], Ũ⃗_indices[1]))
         n = Int(sqrt(length(U_idx) ÷ 2))
         grads = [spzeros(Matrix{ComplexF64}, length(Z)) for He in He_vec]
 
@@ -486,7 +488,7 @@ function TogglingObjective(
             sum_terms = sum(toggle(Z, a_idx, U_idx)[j] for (a_idx, U_idx) in zip(a_indices, Ũ⃗_indices))
             push!(terms, sum_terms)
         end
-        FO_obj = sum(real(norm(tr(term' * term), 2)) / real(traj.T^2 * H_scale^2) for term in terms) 
+        FO_obj = sum(real(norm(tr(term' * term), 2)) / real(traj.T^2 * H_scale^2) / D for term in terms) 
         return Q_t * FO_obj
     end 
 
@@ -514,7 +516,7 @@ function TogglingObjective(
                 full_grad[idx] += sum(2 * real(t) .* real(v) + 2 * imag(t) .* imag(v))
             end 
         end
-        return Q_t * full_grad/ real(traj.T^2 * H_scale^2)
+        return Q_t * full_grad / real(traj.T^2 * H_scale^2) / D
     end 
 
     function ∂²ℓ_structure()
