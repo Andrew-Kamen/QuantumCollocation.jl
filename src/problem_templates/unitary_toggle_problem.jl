@@ -60,6 +60,7 @@ function UnitaryToggleProblem(
     Δt_min::Float64=0.5 * minimum(Δt),
     Δt_max::Float64=2.0 * maximum(Δt),
     Q::Float64=100.0,
+    fast::Bool=true,
     Q_t::Float64=1.0,
     R=1e-2,
     R_a::Union{Float64, Vector{Float64}}=R,
@@ -101,9 +102,13 @@ function UnitaryToggleProblem(
         )
     end
     # Objective
+    # drives = map(Matrix, system.H.H_drives)
     J = UnitaryInfidelityObjective(goal, state_name, traj; Q=Q)
-    J += TogglingObjective(H_err, ∂H_err, traj; Q_t = Q_t)
-
+    if fast
+        J += TogglingObjective(H_err, ∂H_err, traj; Q_t = Q_t)
+    else    
+        J += AutoTogglingObjective(H_err, traj; Q_t = Q_t)
+    end
     control_names = [
         name for name ∈ traj.names
             if endswith(string(name), string(control_name))
@@ -126,4 +131,3 @@ function UnitaryToggleProblem(
         constraints=constraints
     )
 end
-

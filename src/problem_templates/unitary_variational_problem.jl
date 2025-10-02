@@ -164,6 +164,9 @@ function UnitaryVariationalProblem(
     J += QuadraticRegularizer(control_names[1], traj, R_a)
     J += QuadraticRegularizer(control_names[2], traj, R_da)
     J += QuadraticRegularizer(control_names[3], traj, R_dda)
+   
+    # number of error terms 
+    num_errors = length(system.G_vars)
 
 
     # number of error terms 
@@ -186,7 +189,6 @@ function UnitaryVariationalProblem(
             num_errors=num_errors
         )
     end
-    
     # Optional Piccolo constraints and objectives
     J += apply_piccolo_options!(
         piccolo_options, constraints, traj;
