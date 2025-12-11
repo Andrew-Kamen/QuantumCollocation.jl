@@ -346,9 +346,9 @@ function TurboUniversalObjective(
     traj::NamedTrajectory;
     Q_t::Float64 = 1.0,
 )
-    T = traj.T
+    T = traj.T - 1
     d = size(iso_vec_to_operator(traj.components.Ũ⃗[:,end]))[1]
-    Ũ⃗_indices  = [collect(slice(k, traj.components.Ũ⃗, traj.dim)) for k in 1:traj.T]
+    Ũ⃗_indices  = [collect(slice(k, traj.components.Ũ⃗, traj.dim)) for k in 1:T]
     normalization = Q_t / (d^2 * T^2)
     # Build a column-stacked matrix V whose k-th column is the vectorized U(t_k,0).
     # Ũ⃗_indices[k] are the index ranges/slices inside Z for the k-th unitary's vectorization.
@@ -357,7 +357,7 @@ function TurboUniversalObjective(
 
     # Build V (m×T) from the packed vector z̃ = [vec(U₁); vec(U₂); … ; vec(U_T)]
     build_V_from_packed(z̃) = begin
-        T = length(Ũ⃗_indices)
+        T = length(Ũ⃗_indices) - 1
         m = length(Ũ⃗_indices[1])
         V = Matrix{complex(eltype(z̃))}(undef, m, T)
         @inbounds for k in 1:T
